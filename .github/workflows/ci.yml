@@ -1,0 +1,51 @@
+name: ci
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      clickhouse:
+        image: clickhouse/clickhouse-server:24.8
+        ports:
+          - 18123:8123
+        env:
+          CLICKHOUSE_USER: dqvouch
+          CLICKHOUSE_PASSWORD: dqvouch
+          CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1  # load.py creates the read-only user dq_reader
+      postgres:
+        image: postgres:16
+        ports:
+          - 15432:5432
+        env:
+          POSTGRES_USER: dqvouch
+          POSTGRES_PASSWORD: dqvouch
+          POSTGRES_DB: dqvouch
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -e ".[dev]"
+      - run: python examples/orders/load.py
+      - run: python examples/orders/load.py examples/orders/dqvouch.clickhouse.toml
+      - run: pytest -q
+        env:
+          DQVOUCH_REQUIRE_DB: "1"
+
+  ui:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+      # The build is committed (pip install needs no Node): it must match the sources.
+      - run: git diff --exit-code -- ../src/dqvouch/static

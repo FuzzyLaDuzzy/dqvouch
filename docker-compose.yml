@@ -1,0 +1,17 @@
+services:
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8
+    ports:
+      - "18123:8123"
+    environment:
+      CLICKHOUSE_USER: dqvouch
+      CLICKHOUSE_PASSWORD: dqvouch
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1   # lets load.py create the read-only user dq_reader
+  postgres:
+    image: postgres:16
+    ports:
+      - "15432:5432"
+    environment:
+      POSTGRES_USER: dqvouch
+      POSTGRES_PASSWORD: dqvouch
+      POSTGRES_DB: dqvouch

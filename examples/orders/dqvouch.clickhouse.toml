@@ -1,0 +1,18 @@
+# Configuration for the fictional orders example on ClickHouse:
+#   docker compose up -d clickhouse && python examples/orders/load.py examples/orders/dqvouch.clickhouse.toml
+
+[database]
+engine = "clickhouse"
+host = "localhost"
+port = 18123
+user = "dqvouch"
+password = "dqvouch"   # demo only; for a real database leave it out and set DQVOUCH_DB_PASSWORD
+schemas = ["landing", "staging", "analytic"]
+
+[llm]
+model = "gemini-3.5-flash-lite"
+# The API key comes from GEMINI_API_KEY (environment or a .env file), never from this file.
+
+[run]
+sql_dir = "sql"     # transformation SQL, relative to this file
+runs_dir = "runs"   # one folder per run, relative to this file
