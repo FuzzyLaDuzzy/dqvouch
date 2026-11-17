@@ -1,7 +1,7 @@
 <script setup>
 // Screen 7: the person decides. Only confirmed items run; "Run confirmed tests" is the one action that runs tests.
 import { computed, inject, onMounted, reactive, ref } from 'vue'
-import { previousDecisions, restoreReview, reviewPayload, testGroups } from '../logic.js'
+import { reviewPayload, startingDecisions, testGroups } from '../logic.js'
 import StageFrame from '../StageFrame.vue'
 import TestCard from '../TestCard.vue'
 
@@ -19,20 +19,21 @@ const specs = computed(() => [...groups.value.flagged, ...groups.value.accepted]
 const thresholds = computed(() => tests.value.metric_thresholds || [])
 const items = computed(() => [...specs.value, ...thresholds.value])
 const confirmed = computed(() => items.value.filter((i) => decisions[i.id] === 'confirmed').length)
-// Tests decided in the last review of this database start with that decision; the person can show only the new ones.
+// Tests decided in the last review of this database (or kept by a structural change) start with that decision;
+// the person can show only the new ones.
 const onlyNew = ref(false)
-const fromEarlier = computed(() => specs.value.filter((s) => s._previous))
+const fromEarlier = computed(() => items.value.filter((s) => s._previous))
 const earlierRun = computed(() => fromEarlier.value[0]?._previous.run)
 const visible = computed(() => (onlyNew.value ? items.value.filter((i) => !i._previous) : items.value))
+// A run made by a structural change found after a scheduled execution: what changed, what was kept and set aside.
+const origin = computed(() => (run.state.info?.origin?.kind === 'change' ? run.state.info.origin : null))
 const excluded = computed(() => items.value.filter((i) => decisions[i.id] === 'excluded').length)
 
 onMounted(async () => {
   try {
     await run.load('tests')
     await run.load('review') // a review saved earlier comes back with its decisions and its edits
-    const saved = run.state.data.review
-      ? restoreReview(specs.value, thresholds.value, run.state.data.review.submitted)
-      : previousDecisions(specs.value) // no review of this run yet: start from the last one of this database
+    const saved = startingDecisions(specs.value, thresholds.value, run.state.data.review)
     Object.assign(decisions, saved.decisions)
     Object.assign(edits, saved.edits)
   } catch (e) {
@@ -80,6 +81,18 @@ async function runConfirmed() {
 
 <template>
   <StageFrame :stage="stage">
+    <div v-if="origin" class="note change">
+      <p v-if="run.state.info.replaced_by"><strong>This run was replaced by
+        <code>{{ run.state.info.replaced_by }}</code></strong>: the structure changed again before it was reviewed.
+        Review that one instead; this one will not take over the schedule.</p>
+      <p>The structure changed since run <code>{{ origin.from_run }}</code>:</p>
+      <ul><li v-for="line in origin.summary" :key="line">{{ line }}</li></ul>
+      <p>{{ origin.kept }} test(s) kept from run <code>{{ origin.from_run }}</code> start confirmed.</p>
+      <template v-if="origin.set_aside.length">
+        <p>Set aside (they no longer fit the tables):</p>
+        <ul><li v-for="a in origin.set_aside" :key="a.id"><code>{{ a.id }}</code>: {{ a.reason }}</li></ul>
+      </template>
+    </div>
     <p class="muted">{{ confirmed }} confirmed, {{ excluded }} excluded, {{ items.length - confirmed - excluded }} undecided.
       Only confirmed items run.
       <button class="link" @click="confirmUndecided">Confirm all undecided</button></p>

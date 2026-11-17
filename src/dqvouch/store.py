@@ -36,7 +36,8 @@ class Run:
         self.id = self.path.name
 
     @classmethod
-    def create(cls, runs_dir, settings: Settings) -> "Run":
+    def create(cls, runs_dir, settings: Settings | dict) -> "Run":
+        """A new run folder. `settings` is a Settings, or a dict that is already public (an earlier run's)."""
         runs_dir = Path(runs_dir)
         runs_dir.mkdir(parents=True, exist_ok=True)
         base = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d-%H%M%S")
@@ -49,9 +50,14 @@ class Run:
                 n += 1
                 path = runs_dir / f"{base}-{n}"
         run = cls(path)
+        public = settings if isinstance(settings, dict) else settings.public_dict()
         _write_json(path / "run.json", {"id": run.id, "created_at": datetime.datetime.now().isoformat(),
-                                        "settings": settings.public_dict()})
+                                        "settings": public})
         return run
+
+    def update_info(self, **fields) -> None:
+        """Adds or replaces top-level keys of run.json (e.g. where a run came from)."""
+        _write_json(self.path / "run.json", {**self.info(), **fields})
 
     @classmethod
     def open(cls, path) -> "Run":
@@ -97,9 +103,9 @@ class Run:
                     return entry
         return None
 
-    def _lock_age(self) -> float | None:
-        """Seconds since the execution lock was taken; None when there is none."""
-        path = self.path / "execution.lock"
+    def _lock_age(self, name: str = "execution.lock") -> float | None:
+        """Seconds since the lock `name` was taken; None when there is none."""
+        path = self.path / name
         try:
             text = path.read_text(encoding="utf-8")
             mtime = path.stat().st_mtime
@@ -111,26 +117,34 @@ class Run:
         except (ValueError, KeyError, TypeError):  # being written, or damaged: its file time says when
             return now.timestamp() - mtime
 
-    def locked(self) -> bool:
-        age = self._lock_age()
+    def locked(self, name: str = "execution.lock") -> bool:
+        age = self._lock_age(name)
         return age is not None and age < LOCK_STALE_SECONDS
 
-    @contextlib.contextmanager
     def execution_lock(self):
         """Held while the run's tests execute, so two executions of one run never overlap, whichever process
         starts them. The file is created exclusively; one older than LOCK_STALE_SECONDS is taken over."""
-        path = self.path / "execution.lock"
+        return self._exclusive("execution.lock", "another execution of run {id} is in progress")
+
+    def proposal_lock(self):
+        """Held while tests are proposed for a structural change found after an execution, so the in-app
+        schedule and a `dqvouch rerun` never propose for the same change at once."""
+        return self._exclusive("proposal.lock", "tests for a change in run {id} are being proposed")
+
+    @contextlib.contextmanager
+    def _exclusive(self, name: str, busy: str):
+        path = self.path / name
         for _ in range(2):
             try:
                 fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
                 break
             except FileExistsError:
-                if self.locked():
-                    raise RunBusyError(f"another execution of run {self.id} is in progress. If none is (a process "
-                                       f"that was killed), delete {path}; it is ignored a day after it was taken.")
+                if self.locked(name):
+                    raise RunBusyError(f"{busy.format(id=self.id)}. If nothing is (a process that was killed), "
+                                       f"delete {path}; it is ignored a day after it was taken.")
                 path.unlink(missing_ok=True)
         else:
-            raise RunBusyError(f"could not take the execution lock {path}")
+            raise RunBusyError(f"could not take the lock {path}")
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump({"pid": os.getpid(), "at": datetime.datetime.now(datetime.timezone.utc).isoformat()}, f)
         try:

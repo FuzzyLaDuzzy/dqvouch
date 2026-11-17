@@ -1,7 +1,7 @@
 <script setup>
 import { computed, inject, onMounted, reactive, ref, watch } from 'vue'
 import { api } from '../api.js'
-import { everyLabel, filterRows, historyRows, passRate, splitEvery, toCSV, trend } from '../logic.js'
+import { changeNotice, everyLabel, filterRows, historyRows, passRate, splitEvery, toCSV, toHash, trend } from '../logic.js'
 import Icon from '../Icon.vue'
 import Sparkline from '../Sparkline.vue'
 import StageFrame from '../StageFrame.vue'
@@ -24,6 +24,9 @@ function countUp(source) {
 
 defineProps({ stage: { type: String, required: true } })
 const run = inject('run')
+// A structural change found by a scheduled execution: the run its new tests wait in, or the run that replaced this one.
+const notice = computed(() => changeNotice(run.state.changes || {}))
+const reviewHref = (id) => toHash({ view: 'run', runId: id, stage: 'review' })
 onMounted(() => run.load('review'))
 
 const rows = computed(() => run.state.data.results?.rows || [])
@@ -146,6 +149,19 @@ function download(kind) {
 
 <template>
   <StageFrame :stage="stage">
+    <p v-if="notice?.kind === 'superseded'" class="note change">This run was superseded by
+      <code>{{ notice.run }}</code>; its schedule moved there.
+      <a class="btn ghost" :href="reviewHref(notice.run)">Open it</a></p>
+    <p v-else-if="notice?.kind === 'pending'" class="note change">The structure changed: {{ notice.proposed }} new
+      test(s) wait for review in run <code>{{ notice.run }}</code>.
+      <a class="btn primary" :href="reviewHref(notice.run)">Review them</a></p>
+    <div v-else-if="notice" class="note change">
+      <p v-if="notice.kind === 'failed'">The structure changed, but proposing new tests failed: {{ notice.error }}.
+        dqvouch will try again at the next execution.</p>
+      <p v-else>The structure changed. Proposing is off (<code>propose_on_change = false</code>): start a new run to
+        cover it.</p>
+      <ul><li v-for="line in notice.lines" :key="line">{{ line }}</li></ul>
+    </div>
     <div v-if="refused.length" class="notice">
       The validator refused {{ refused.length }} of your edits, so those tests did not run:
       <ul><li v-for="(r, i) in refused" :key="i"><strong>{{ String(r.scope).split('__').at(-1) }}</strong>: {{ r.reason }}</li></ul>

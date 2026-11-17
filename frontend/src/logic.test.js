@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import { STAGES, STAGE_INFO, llmPrompts, nextStage, parseHash, toHash, everyLabel, historyRows, jobProgress, previousDecisions, splitEvery, trend } from './logic.js'
+import { STAGES, STAGE_INFO, changeLabel, changeNotice, llmPrompts, nextStage, parseHash, toHash, everyLabel, historyRows, jobProgress, previousDecisions, splitEvery, startingDecisions, trend } from './logic.js'
 
 describe('navigation', () => {
   test('hash round trip', () => {
@@ -282,5 +282,42 @@ describe('reusing the last review', () => {
       decisions: { a: 'excluded', b: 'confirmed', c: 'confirmed' },
       edits: { b: { threshold: { operator: 'less_than_or_equal', value: 5 } } },
     })
+  })
+})
+
+describe('structural changes', () => {
+  test('a change run starts with its kept tests and thresholds confirmed', () => {
+    const kept = { status: 'confirmed', run: 'r1' }
+    const specs = [
+      { id: 's1', threshold: { operator: 'equals', value: 0 }, _previous: { ...kept, threshold: { operator: 'equals', value: 0 } } },
+      { id: 's2' },
+    ]
+    const thresholds = [{ id: 'm1', metric: 'null_rate', operator: 'less_than_or_equal', value: 0.1, _previous: kept }]
+    expect(startingDecisions(specs, thresholds, null).decisions).toEqual({ s1: 'confirmed', m1: 'confirmed' })
+  })
+
+  test('a saved review wins over the kept decisions', () => {
+    const specs = [{ id: 's1', _previous: { status: 'confirmed', run: 'r1' } }]
+    const review = { submitted: { test_specifications: [{ id: 's1', status: 'excluded' }], metric_thresholds: [] } }
+    expect(startingDecisions(specs, [], review).decisions).toEqual({ s1: 'excluded' })
+  })
+
+  test('runs say where a change left them', () => {
+    expect(changeLabel({ origin: { kind: 'change' }, completed: ['tests'], changes: {} }))
+      .toBe('waiting for review: the structure changed')
+    expect(changeLabel({ origin: { kind: 'change' }, completed: ['tests'], replaced_by: 'r9', changes: {} })).toBe('replaced by r9')
+    expect(changeLabel({ origin: null, completed: ['review'], changes: { superseded_by: 'r2' } })).toBe('superseded by r2')
+    expect(changeLabel({ origin: null, completed: ['review'], changes: {} })).toBe(null)
+  })
+})
+
+describe('the change notice on a run', () => {
+  test('what a structural change left on this run, most important first', () => {
+    expect(changeNotice({})).toBe(null)
+    expect(changeNotice({ superseded_by: 'r2', pending_run: 'r3' })).toEqual({ kind: 'superseded', run: 'r2' })
+    expect(changeNotice({ pending_run: 'r3', proposed: 2 })).toEqual({ kind: 'pending', run: 'r3', proposed: 2 })
+    expect(changeNotice({ failed: { error: 'model down', lines: ['t: SQL changed'] } }))
+      .toEqual({ kind: 'failed', error: 'model down', lines: ['t: SQL changed'] })
+    expect(changeNotice({ detected: { lines: ['t: + c (Int32)'] } })).toEqual({ kind: 'off', lines: ['t: + c (Int32)'] })
   })
 })

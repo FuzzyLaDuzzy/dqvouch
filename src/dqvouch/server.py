@@ -20,7 +20,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from dqvouch import alerts, pipeline
+from dqvouch import alerts, changes, pipeline
 from dqvouch.config import ALERT_NAMES, SECRET_NAMES, DatabaseSettings, Secrets, Settings, load_settings
 from dqvouch import llm as llm_module
 from dqvouch.llm import QuotaExhaustedError, list_models, list_openai_models
@@ -141,7 +141,9 @@ def create_app(runs_dir, env_path=".env", config_path=None, llm_factory=None, sc
                 runs.append({"id": run.id, "created_at": info["created_at"],
                              "engine": info["settings"]["database"]["engine"],
                              "schemas": info["settings"]["database"]["schemas"], "completed": run.completed(),
-                             "every_minutes": (_schedule(run) or {}).get("every_minutes")})
+                             "every_minutes": (_schedule(run) or {}).get("every_minutes"),
+                             "origin": info.get("origin"), "replaced_by": info.get("replaced_by"),
+                             "changes": changes.read_state(run)})
         return sorted(runs, key=lambda r: r["id"], reverse=True)
 
     def current_job(run_id: str):
@@ -157,7 +159,8 @@ def create_app(runs_dir, env_path=".env", config_path=None, llm_factory=None, sc
             runs = list_runs()
             s = open_run(runs[0]["id"]).info()["settings"] if runs else DEFAULT_SETTINGS
         return {"settings": {"database": s["database"], "sql_dir": s.get("sql_dir"), "model": s.get("model"),
-                             "provider": s.get("provider", "gemini"), "base_url": s.get("base_url")},
+                             "provider": s.get("provider", "gemini"), "base_url": s.get("base_url"),
+                             "propose_on_change": s.get("propose_on_change", True)},
                 "secrets": secrets.status(), "env_file": str(secrets.env_path.resolve())}
 
     @app.put("/api/secrets/{name}")
@@ -255,7 +258,7 @@ def create_app(runs_dir, env_path=".env", config_path=None, llm_factory=None, sc
         settings = Settings(database=database(body.get("database")), model=body.get("model") or Settings.model,
                             provider=body.get("provider") or Settings.provider, base_url=body.get("base_url") or None,
                             sql_dir=sql_dir, runs_dir=str(runs_dir), context_level="C3", signals=True,
-                            sql_rules=True, repair=True)
+                            sql_rules=True, repair=True, propose_on_change=body.get("propose_on_change", True))
         try:
             settings.validate()
         except ValueError as e:
@@ -265,7 +268,8 @@ def create_app(runs_dir, env_path=".env", config_path=None, llm_factory=None, sc
     @app.get("/api/runs/{run_id}")
     def get_run(run_id: str):
         run = open_run(run_id)
-        return {"info": run.info(), "completed": run.completed(), "job": current_job(run_id)}
+        return {"info": run.info(), "completed": run.completed(), "job": current_job(run_id),
+                "changes": changes.read_state(run)}
 
     @app.get("/api/runs/{run_id}/stages/{stage}")
     def get_stage(run_id: str, stage: str):
@@ -283,6 +287,11 @@ def create_app(runs_dir, env_path=".env", config_path=None, llm_factory=None, sc
                     spec["_display"] = _display(spec, contexts, summary)
                     if pipeline.signature(spec) in earlier:
                         spec["_previous"] = earlier[pipeline.signature(spec)]
+            # kept from the run a structural change started from: they start confirmed, as they were
+            for item in (data.get("test_specifications") or []) + (data.get("metric_thresholds") or []):
+                if isinstance(item, dict) and item.get("_kept_from"):
+                    item["_previous"] = {"status": "confirmed", "run": item["_kept_from"],
+                                         **({"threshold": item.get("threshold")} if "assertion" in item else {})}
         return data
 
     @app.post("/api/runs/{run_id}/stages/{stage}")
@@ -303,11 +312,15 @@ def create_app(runs_dir, env_path=".env", config_path=None, llm_factory=None, sc
                     raise HTTPException(409, "a stage is already running; wait for it to finish")
                 try:
                     undecided = [i for i in body.get("undecided") or [] if isinstance(i, str)]
-                    return pipeline.stage_review(run, _as_reviewed(body.get("test_specifications")),
+                    data = pipeline.stage_review(run, _as_reviewed(body.get("test_specifications")),
                                                  _as_reviewed(body.get("metric_thresholds", [])), "interface",
                                                  undecided)
                 except ValueError as e:
                     raise HTTPException(422, str(e)) from e
+                origin = run.info().get("origin") or {}
+                if origin.get("kind") == "change" and changes.hand_over(run):  # the executions move to this run
+                    data = {**data, "handed_over_from": origin.get("from_run")}
+                return data
         return JSONResponse(status_code=202, content={"job": start_job(run, stage, {**body, "trigger": "manual"})})
 
     def start_job(run: Run, stage: str, body: dict) -> dict:
@@ -399,6 +412,14 @@ def create_app(runs_dir, env_path=".env", config_path=None, llm_factory=None, sc
     def notify(run: Run):
         return alerts.notifier(secrets.alert_values(), redact, run.info())
 
+    def model_for(settings: dict):
+        """The model of a run's settings, with this installation's key; _JobError("key") without a Gemini key."""
+        local = settings.get("provider", "gemini") == "openai"
+        key = secrets.get("OPENAI_API_KEY" if local else "GEMINI_API_KEY")
+        if not key and not local:  # a local model usually needs no key
+            raise _JobError("key", "Set the Gemini API key on the Configuration screen.")
+        return make_llm(settings, key)
+
     def work(job: dict, run: Run, stage: str, body: dict) -> None:
         settings, wh = run.info()["settings"], None
         held = contextlib.ExitStack()
@@ -413,11 +434,7 @@ def create_app(runs_dir, env_path=".env", config_path=None, llm_factory=None, sc
                 held.enter_context(run.execution_lock())
             llm = None
             if stage in LLM_STAGES:
-                local = settings.get("provider", "gemini") == "openai"
-                key = secrets.get("OPENAI_API_KEY" if local else "GEMINI_API_KEY")
-                if not key and not local:  # a local model usually needs no key
-                    raise _JobError("key", "Set the Gemini API key on the Configuration screen.")
-                llm = make_llm(settings, key)
+                llm = model_for(settings)
                 if hasattr(llm, "on_retry"):
                     llm.on_retry = retrying
             if stage in DB_STAGES:
@@ -438,6 +455,14 @@ def create_app(runs_dir, env_path=".env", config_path=None, llm_factory=None, sc
                 pipeline.stage_tests(run, llm, wh, progress)
             elif stage == "results":
                 pipeline.stage_results(run, wh, progress, body.get("trigger", "manual"), notify(run))
+                if body.get("trigger") == "schedule":  # then look for structural changes, the lock released
+                    held.close()
+                    job.update(message="Checking for structure changes", note=None)
+                    try:
+                        job["changes"] = changes.after_execution(run, wh, lambda: model_for(settings),
+                                                                 secrets.alert_values(), redact, progress)
+                    except Exception as e:  # never turns a finished execution into a failed one
+                        job["changes"] = {"status": "failed", "error": redact(str(e) or type(e).__name__)}
             job.update(status="done", message=f"{stage} finished")
         except RunBusyError as e:  # not a failed execution: nothing is recorded, nobody is alerted
             job.update(status="error", error_kind="busy", error=str(e))

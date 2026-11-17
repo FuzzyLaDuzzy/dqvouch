@@ -238,3 +238,28 @@ export function previousDecisions(specs) {
   }
   return { decisions, edits }
 }
+
+// The Review screen's starting decisions: a saved review's when there is one, otherwise the last review of this
+// database and, for a run made by a structural change, the tests and metric thresholds it kept (both carry
+// `_previous`), so a kept item never starts undecided and is never dropped unseen.
+export function startingDecisions(specs, thresholds, review) {
+  return review ? restoreReview(specs, thresholds, review.submitted) : previousDecisions([...specs, ...thresholds])
+}
+
+// Where a structural change left a run, for the run list: null when it left none.
+export function changeLabel(run) {
+  if (run.replaced_by) return `replaced by ${run.replaced_by}`
+  if (run.changes?.superseded_by) return `superseded by ${run.changes.superseded_by}`
+  if (run.origin?.kind === 'change' && !run.completed.includes('review')) return 'waiting for review: the structure changed'
+  return null
+}
+
+// What a structural change found by a scheduled execution left on this run, for its Results screen; null when
+// nothing: replaced by a reviewed run, new tests waiting for review, proposing failed, or proposing is off.
+export function changeNotice(changes) {
+  if (changes.superseded_by) return { kind: 'superseded', run: changes.superseded_by }
+  if (changes.pending_run) return { kind: 'pending', run: changes.pending_run, proposed: changes.proposed ?? 0 }
+  if (changes.failed) return { kind: 'failed', error: changes.failed.error, lines: changes.failed.lines || [] }
+  if (changes.detected) return { kind: 'off', lines: changes.detected.lines || [] }
+  return null
+}

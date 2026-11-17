@@ -6,7 +6,7 @@ import json
 import re
 from pathlib import Path
 
-from dqvouch import alerts
+from dqvouch import alerts, changes
 from dqvouch.config import CONTEXT_LEVELS, DatabaseSettings, Secrets, llm_api_key, load_settings
 from dqvouch.llm import QuotaExhaustedError, make_llm
 from dqvouch.pipeline import (
@@ -59,7 +59,8 @@ def _parser() -> argparse.ArgumentParser:
                                          "Scheduler, Airflow or CI); exit 0 all fine, 1 a test failed or errored, "
                                          "2 it could not run")
     rerun.add_argument("run_dir", help="the run's folder")
-    rerun.add_argument("--env-file", default=".env", help="where the database password is saved")
+    rerun.add_argument("--env-file", default=".env",
+                       help="where the database password, the model key and the alert settings are saved")
     export = sub.add_parser("export", help="write a reviewed run's confirmed tests as one SQL file")
     export.add_argument("run_dir", help="the run's folder")
     export.add_argument("-o", "--output", help="the file to write (default: print it)")
@@ -157,12 +158,31 @@ def os_schedule_lines(exe: str, run_dir: str, env_file: str, every_minutes: int)
     return {"cron": cron, "schtasks": schtasks}
 
 
-def _rerun(args) -> int:
+def _print_changes(run: Run, outcome: dict) -> None:
+    """What the structure check after the tests found, for the person (or the log) reading `rerun`'s output."""
+    if outcome["status"] in ("unchanged", "busy"):
+        return
+    print("\nThe structure changed since the run was reviewed:")
+    for line in outcome["lines"]:
+        print(f"  {line}")
+    if outcome["status"] == "detected_only":
+        print("structure changed; proposing is off (propose_on_change = false)")
+    elif outcome["status"] == "failed":
+        print(f"proposing failed: {outcome['error']}")
+    else:
+        pending = Run.open(run.path.parent / outcome["pending_run"]).info().get("origin") or {}
+        print(f"{pending.get('proposed', 0)} new test(s) to review in run {outcome['pending_run']} (dqvouch ui)")
+
+
+def _rerun(args, llm=None) -> int:
     path = Path(args.run_dir)
     if not (path / "run.json").is_file():
         print(f"error: no dqvouch run in {path}")
         return 2
-    run = Run.open(path)
+    named = Run.open(path)
+    run = changes.current(named)  # a cron line keeps naming the run it was made for
+    if run.id != named.id:
+        print(f"note: run {named.id} was replaced by {run.id} after a structure change; running {run.id}")
     if "review" not in run.completed():
         print(f"error: run {run.id} has no review yet: confirm its tests first (dqvouch ui)")
         return 2
@@ -177,6 +197,15 @@ def _rerun(args) -> int:
                                "error": message}, notify)
         print(f"error: {message}")
         return 2
+
+    def model():
+        if llm is not None:
+            return llm
+        provider = info["settings"].get("provider", "gemini")
+        key = secrets.get("OPENAI_API_KEY" if provider == "openai" else "GEMINI_API_KEY")
+        if not key and provider == "gemini":  # a local model usually needs no key
+            raise ValueError("GEMINI_API_KEY is not set in the --env-file or the environment")
+        return make_llm(info["settings"], key)
     try:
         with run.execution_lock():
             try:
@@ -188,13 +217,18 @@ def _rerun(args) -> int:
                     print(f"warning: {WRITE_WARNING}")
                 rows = stage_results(run, wh, trigger="command", notify=notify)["rows"]
             except Exception as e:
-                return failed(str(e) or type(e).__name__)
-            finally:
                 wh.close()
+                return failed(str(e) or type(e).__name__)
     except RunBusyError as e:
         print(f"error: {e}")
         return 2
     print_results_report(rows)
+    try:  # the tests ran and the lock is released: now look for structural changes (never changes the exit code)
+        _print_changes(run, changes.after_execution(run, wh, model, secrets.alert_values(), secrets.redact))
+    except Exception as e:
+        print(f"warning: checking for structure changes failed: {secrets.redact(str(e) or type(e).__name__)}")
+    finally:
+        wh.close()
     return 1 if any(r["verdict"] in ("fail", "error") for r in rows) else 0
 
 
@@ -237,7 +271,7 @@ def main(argv: list[str] | None = None, llm=None) -> int:
     args = _parser().parse_args(argv)
     try:
         if args.command == "rerun":
-            return _rerun(args)
+            return _rerun(args, llm)
         if args.command == "export":
             return _export(args)
         return _ui(args) if args.command == "ui" else _run(args, llm)

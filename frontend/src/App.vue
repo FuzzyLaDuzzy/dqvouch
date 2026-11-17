@@ -25,7 +25,7 @@ const screens = {
 const route = ref(parseHash(location.hash))
 window.addEventListener('hashchange', () => { route.value = parseHash(location.hash) })
 
-const state = reactive({ id: null, info: null, completed: [], job: null, data: {}, error: null })
+const state = reactive({ id: null, info: null, completed: [], job: null, changes: {}, data: {}, error: null })
 let stopWatching = () => {}
 let waiting = []
 
@@ -74,6 +74,7 @@ function follow() {
     const before = state.job
     state.completed = r.completed
     state.job = r.job
+    state.changes = r.changes || {}  // a structural change found by a schedule: the run it is waiting in
     // A job that has just finished: one we saw running, or one that ran entirely between two polls (a schedule).
     const finished = r.job && r.job.status !== 'running' && (before?.status === 'running' || before?.started !== r.job.started)
     for (const s of staleStages(Object.keys(state.data), finished ? r.job : null, r.completed)) delete state.data[s]
@@ -122,7 +123,7 @@ async function submitReview(payload) {
 
 async function openRun(id) {
   const r = await api.run(id)
-  Object.assign(state, { id, info: r.info, completed: r.completed, job: r.job, data: {}, error: null })
+  Object.assign(state, { id, info: r.info, completed: r.completed, job: r.job, changes: r.changes || {}, data: {}, error: null })
   follow()
 }
 

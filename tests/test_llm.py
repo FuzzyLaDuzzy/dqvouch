@@ -143,3 +143,33 @@ def test_make_llm_follows_the_runs_provider():
     assert isinstance(make_llm({"model": "gemini-x"}, "k"), llm_module.GeminiLLM)
     local = make_llm({"model": "llama3", "provider": "openai", "base_url": "http://localhost:11434/v1"}, None)
     assert isinstance(local, OpenAICompatibleLLM) and local.model_id == "llama3"
+
+
+def test_a_limit_on_attempts_turns_a_long_gemini_outage_into_an_error(monkeypatch):
+    calls = []
+
+    def generate_content(**kwargs):
+        calls.append(1)
+        raise RuntimeError("503 UNAVAILABLE")
+
+    class FakeClient:
+        def __init__(self, api_key):
+            self.models = SimpleNamespace(generate_content=generate_content)
+
+    monkeypatch.setattr(llm_module.genai, "Client", FakeClient)
+    monkeypatch.setattr(llm_module.time, "sleep", lambda s: None)
+    llm = llm_module.GeminiLLM("m", "k")
+    llm.max_attempts = 3  # what a scheduled execution sets: an outage must end, not hang the schedule
+    with pytest.raises(RuntimeError, match="503"):
+        llm("p")
+    assert len(calls) == 3
+
+
+def test_a_limit_on_attempts_turns_a_long_busy_server_into_an_error(openai_server, monkeypatch):
+    monkeypatch.setattr(llm_module.time, "sleep", lambda s: None)
+    openai_server["answers"] += [(503, {})] * 5
+    llm = OpenAICompatibleLLM("m", openai_server["url"])
+    llm.max_attempts = 2
+    with pytest.raises(Exception, match="503"):
+        llm("p")
+    assert len(openai_server["requests"]) == 2

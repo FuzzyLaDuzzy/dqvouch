@@ -1,5 +1,6 @@
 """The web API end to end on the demo databases (both engines), with the scripted FakeLLM."""
 import json
+import shutil
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -7,6 +8,8 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from fake_llm import FakeLLM
 from fastapi.testclient import TestClient
+
+from conftest import EXAMPLE
 
 from dqvouch.llm import QuotaExhaustedError
 from dqvouch import server as server_module
@@ -431,3 +434,87 @@ def test_the_page_is_never_cached(tmp_path):
     """After an update the build's file names change: a cached page would ask for files that no longer exist."""
     c = make_client(tmp_path, None, lambda settings, key: None)
     assert c.get("/").headers["cache-control"] == "no-cache"
+
+
+
+# --- structural changes found by a scheduled execution ----------------------------------------------------------
+
+def _scheduled_run_on_a_sql_copy(client, tmp_path) -> tuple[str, object]:
+    """A reviewed run of the demo whose SQL is an editable copy, executed once and scheduled every hour."""
+    sql_dir = tmp_path / "sql"
+    shutil.copytree(EXAMPLE / "sql", sql_dir)
+    settings = {**client.get("/api/settings").json()["settings"], "sql_dir": str(sql_dir)}
+    r = client.post("/api/runs", json=settings)
+    assert r.status_code == 201, r.text
+    run_id = r.json()["id"]
+    review_and_run(client, run_id, through_tests(client, run_id)["test_specifications"])
+    assert client.put(f"/api/runs/{run_id}/schedule", json={"every_minutes": 60}).status_code == 200
+    path = sql_dir / "04_analytic_fact_orders.sql"
+    path.write_text(path.read_text(encoding="utf-8").replace("WHERE o.status != 'test'",
+                                                             "WHERE o.status NOT IN ('test', 'demo')"), encoding="utf-8")
+    return run_id, datetime.now(timezone.utc) + timedelta(minutes=61)
+
+
+def test_a_scheduled_execution_proposes_tests_after_a_structure_change(client, tmp_path):
+    run_id, later = _scheduled_run_on_a_sql_copy(client, tmp_path)
+    assert client.app.state.run_due_schedules(later) == [run_id]
+    job = wait(client, run_id)
+    assert job["status"] == "done" and job["changes"]["status"] == "proposed"
+    runs = client.get("/api/runs").json()
+    new = next(r for r in runs if (r.get("origin") or {}).get("kind") == "change")
+    old = next(r for r in runs if r["id"] == run_id)
+    assert old["changes"]["pending_run"] == new["id"]
+    assert client.get(f"/api/runs/{run_id}").json()["changes"]["pending_run"] == new["id"]
+
+
+def test_reviewing_a_pending_run_hands_the_schedule_over(client, tmp_path):
+    run_id, later = _scheduled_run_on_a_sql_copy(client, tmp_path)
+    client.app.state.run_due_schedules(later)
+    wait(client, run_id)
+    pending_id = client.get(f"/api/runs/{run_id}").json()["changes"]["pending_run"]
+    tests = client.get(f"/api/runs/{pending_id}/stages/tests").json()
+    kept = [s for s in tests["test_specifications"] if s.get("_kept_from")]
+    assert kept and all(s["_previous"]["status"] == "confirmed" for s in kept)
+    r = client.post(f"/api/runs/{pending_id}/stages/review", json={
+        "test_specifications": [{**s, "status": "confirmed"} for s in tests["test_specifications"]],
+        "metric_thresholds": [{**m, "status": "confirmed"} for m in tests["metric_thresholds"]]})
+    assert r.status_code == 200, r.text
+    assert r.json()["handed_over_from"] == run_id
+    assert client.get(f"/api/runs/{pending_id}/schedule").json()["schedule"]["every_minutes"] == 60
+    assert client.get(f"/api/runs/{run_id}/schedule").json()["schedule"] is None
+    old = next(r for r in client.get("/api/runs").json() if r["id"] == run_id)
+    assert old["changes"]["superseded_by"] == pending_id
+
+
+def test_a_scheduled_execution_is_done_even_when_proposing_fails(tmp_path, demo_config_path, wh):
+    model = {"down": False}
+
+    def factory(settings, key):
+        if not model["down"]:
+            return FakeLLM()
+
+        def down(prompt):
+            raise RuntimeError("model down")
+        return down
+    c = make_client(tmp_path, demo_config_path, factory)
+    assert c.put("/api/secrets/GEMINI_API_KEY", json={"value": "test-key"}).status_code == 200
+    run_id, later = _scheduled_run_on_a_sql_copy(c, tmp_path)
+    model["down"] = True
+    assert c.app.state.run_due_schedules(later) == [run_id]
+    job = wait(c, run_id)
+    assert job["status"] == "done" and job["changes"]["status"] == "failed" and "model down" in job["changes"]["error"]
+    history = c.get(f"/api/runs/{run_id}/schedule").json()["history"]
+    assert history[0]["trigger"] == "schedule" and history[0]["verdicts"]
+
+
+def test_a_run_made_in_the_interface_takes_propose_on_change_from_the_config(tmp_path, demo_config_path, wh):
+    text = demo_config_path.read_text(encoding="utf-8").replace('sql_dir = "sql"',
+                                                                 f"sql_dir = '{(EXAMPLE / 'sql').as_posix()}'")
+    config = tmp_path / "dqvouch.toml"
+    config.write_text(text + "propose_on_change = false\n", encoding="utf-8")  # [run] is the file's last section
+    c = make_client(tmp_path, config, lambda settings, key: FakeLLM())
+    settings = c.get("/api/settings").json()["settings"]
+    assert settings["propose_on_change"] is False
+    r = c.post("/api/runs", json=settings)
+    assert r.status_code == 201, r.text
+    assert Run.open(tmp_path / "runs" / r.json()["id"]).info()["settings"]["propose_on_change"] is False

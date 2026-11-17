@@ -58,10 +58,12 @@ class GeminiLLM:
         self.max_delay_seconds = max_delay_seconds
         self._client = genai.Client(api_key=api_key)
         self.on_retry = None  # on_retry(note) while it waits to try again, on_retry(None) once answered
+        self.max_attempts = None  # None: retry a busy model for as long as it takes; n: give up after n attempts
 
     def __call__(self, prompt: str) -> str:
         """
-        Retries INDEFINITELY on transient errors (503 UNAVAILABLE, 429 rate
+        Retries INDEFINITELY (unless max_attempts is set: a scheduled execution
+        sets it, so an outage ends) on transient errors (503 UNAVAILABLE, 429 rate
         limits, 5xx): a run can do a lot of real work (metadata, profiling
         SQL) before reaching an LLM call, and a momentary capacity spike on
         the provider's side should not throw that away. Backoff doubles each
@@ -89,7 +91,7 @@ class GeminiLLM:
                         f"Gemini daily quota exhausted for model {self.model_id}. Retrying will not help until the "
                         f"quota resets; choose a model with a higher quota or try again later. Original error: {e}"
                     ) from e
-                if not _is_transient_gemini_error(e):
+                if not _is_transient_gemini_error(e) or (self.max_attempts and attempt >= self.max_attempts):
                     raise
                 delay = (min(self.base_delay_seconds * (2 ** (attempt - 1)), self.max_delay_seconds)
                          + random.uniform(0, 1.5))
@@ -143,6 +145,7 @@ class OpenAICompatibleLLM:
         self.base_delay_seconds = base_delay_seconds
         self.max_delay_seconds = max_delay_seconds
         self.on_retry = None  # on_retry(note) while it waits to try again, on_retry(None) once answered
+        self.max_attempts = None  # None: retry a busy model for as long as it takes; n: give up after n attempts
         self._host = urlsplit(self.base_url).netloc or self.base_url
 
     def __call__(self, prompt: str) -> str:
@@ -172,6 +175,8 @@ class OpenAICompatibleLLM:
                     return answer["choices"][0]["message"]["content"] or ""
                 except (KeyError, IndexError, TypeError) as e:
                     raise RuntimeError(f"unexpected answer from {self._host}: {str(answer)[:300]}") from e
+            if self.max_attempts and attempt >= self.max_attempts:
+                raise RuntimeError(f"{why}; gave up after {attempt} attempts")
             delay = (min(self.base_delay_seconds * (2 ** (attempt - 1)), self.max_delay_seconds)
                      + random.uniform(0, 1.5))
             print(f"{why}; retrying in {delay:.1f}s...")

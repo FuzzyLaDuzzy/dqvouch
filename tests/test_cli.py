@@ -1,8 +1,11 @@
 import json
+import shutil
+from pathlib import Path
 
 from fake_llm import FakeLLM
 
 from conftest import EXAMPLE
+from dqvouch.changes import hand_over
 from dqvouch.cli import main, os_schedule_lines
 from dqvouch.config import load_settings
 from dqvouch.llm import QuotaExhaustedError
@@ -18,10 +21,10 @@ schemas = ["landing"]
 """
 
 
-def demo_config(tmp_path, demo_config_path):
-    """The example's config with absolute sql_dir and a runs folder inside tmp_path."""
+def demo_config(tmp_path, demo_config_path, sql_dir=None):
+    """The example's config with absolute sql_dir (the example's, or `sql_dir`) and a runs folder inside tmp_path."""
     text = demo_config_path.read_text(encoding="utf-8")
-    text = text.replace('sql_dir = "sql"', f"sql_dir = '{(EXAMPLE / 'sql').as_posix()}'")
+    text = text.replace('sql_dir = "sql"', f"sql_dir = '{Path(sql_dir or EXAMPLE / 'sql').as_posix()}'")
     cfg = tmp_path / "dqvouch.toml"
     cfg.write_text(text, encoding="utf-8")
     return cfg
@@ -68,9 +71,15 @@ def _env(tmp_path):
     return env
 
 
-def _reviewed_run_dir(tmp_path, demo_config_path, passing=False):
-    """A demo run made with `dqvouch run --no-review`; `passing` re-reviews it with limits nothing exceeds."""
-    assert main(["run", "--config", str(demo_config(tmp_path, demo_config_path)), "--no-review"], llm=FakeLLM()) == 0
+def _reviewed_run_dir(tmp_path, demo_config_path, passing=False, editable_sql=False):
+    """A demo run made with `dqvouch run --no-review`; `passing` re-reviews it with limits nothing exceeds;
+    `editable_sql` gives it a copy of the example's SQL in tmp_path/sql, which a test may change."""
+    sql_dir = None
+    if editable_sql:
+        sql_dir = tmp_path / "sql"
+        shutil.copytree(EXAMPLE / "sql", sql_dir)
+    config = demo_config(tmp_path, demo_config_path, sql_dir)
+    assert main(["run", "--config", str(config), "--no-review"], llm=FakeLLM()) == 0
     path = next((tmp_path / "runs").iterdir())
     if passing:
         run = Run.open(path)
@@ -123,3 +132,52 @@ def test_os_schedule_lines_quote_paths_with_spaces():
     assert r"'/runs/it'\''s'" in os_schedule_lines("/opt/dq", "/runs/it's", "/e", 120)["cron"]
     two_days = os_schedule_lines("/opt/dq", "/r", "/e", 2880)
     assert two_days["cron"].startswith("0 0 */2 * * ") and "/sc daily /mo 2" in two_days["schtasks"]
+
+
+
+def _edit_fact_orders(sql_dir):
+    path = sql_dir / "04_analytic_fact_orders.sql"
+    path.write_text(path.read_text(encoding="utf-8").replace("WHERE o.status != 'test'",
+                                                             "WHERE o.status NOT IN ('test', 'demo')"), encoding="utf-8")
+
+
+def test_rerun_proposes_tests_for_a_changed_table_and_keeps_its_exit_code(tmp_path, demo_config_path, wh,
+                                                                          monkeypatch, capsys):
+    monkeypatch.delenv("DQVOUCH_DB_PASSWORD", raising=False)
+    path = _reviewed_run_dir(tmp_path, demo_config_path, editable_sql=True)
+    _edit_fact_orders(tmp_path / "sql")
+    capsys.readouterr()
+    assert main(["rerun", str(path), "--env-file", str(_env(tmp_path))], llm=FakeLLM()) == 1
+    runs = sorted((tmp_path / "runs").iterdir())
+    assert len(runs) == 2 and Run.open(runs[1]).info()["origin"]["kind"] == "change"
+    assert "to review in run" in capsys.readouterr().out
+
+
+def test_rerun_follows_a_hand_over(tmp_path, demo_config_path, wh, monkeypatch, capsys):
+    monkeypatch.delenv("DQVOUCH_DB_PASSWORD", raising=False)
+    path = _reviewed_run_dir(tmp_path, demo_config_path, editable_sql=True)
+    _edit_fact_orders(tmp_path / "sql")
+    env = str(_env(tmp_path))
+    main(["rerun", str(path), "--env-file", env], llm=FakeLLM())
+    pending = Run.open(sorted((tmp_path / "runs").iterdir())[1])
+    t = pending.load("tests")
+    stage_review(pending, [{**s, "status": "confirmed"} for s in t["test_specifications"]],
+                 [{**m, "status": "confirmed"} for m in t["metric_thresholds"]], "interface")
+    hand_over(pending)
+    old_count, new_count = len(Run.open(path).history()), len(pending.history())
+    capsys.readouterr()
+    main(["rerun", str(path), "--env-file", env], llm=FakeLLM())
+    assert "was replaced by" in capsys.readouterr().out
+    assert len(pending.history()) == new_count + 1 and len(Run.open(path).history()) == old_count
+
+
+def test_rerun_exit_code_ignores_a_failed_proposal(tmp_path, demo_config_path, wh, monkeypatch, capsys):
+    monkeypatch.delenv("DQVOUCH_DB_PASSWORD", raising=False)
+    path = _reviewed_run_dir(tmp_path, demo_config_path, editable_sql=True)
+    _edit_fact_orders(tmp_path / "sql")
+
+    def down(prompt):
+        raise RuntimeError("model down")
+    capsys.readouterr()
+    assert main(["rerun", str(path), "--env-file", str(_env(tmp_path))], llm=down) == 1
+    assert "proposing failed" in capsys.readouterr().out

@@ -11,7 +11,7 @@ const readonly = computed(() => props.stage === 'config')
 
 const form = reactive({ engine: 'postgres', host: 'localhost', port: 5432, user: '', database: '', schemas: '',
                         query_timeout_seconds: 600, sql_dir: '', model: 'gemini-3.5-flash-lite',
-                        provider: 'gemini', base_url: 'http://localhost:11434/v1' })
+                        provider: 'gemini', base_url: 'http://localhost:11434/v1', propose_on_change: true })
 const OLLAMA = 'http://localhost:11434/v1'
 const keyName = computed(() => (form.provider === 'openai' ? 'OPENAI_API_KEY' : 'GEMINI_API_KEY'))
 function chooseProvider() {
@@ -43,6 +43,7 @@ onMounted(async () => {
       schemas: (d.schemas || []).join(', '), query_timeout_seconds: d.query_timeout_seconds ?? 600,
       sql_dir: settings.sql_dir || '', model: settings.model || form.model,
       provider: settings.provider || 'gemini', base_url: settings.base_url || OLLAMA,
+      propose_on_change: settings.propose_on_change ?? true, // from the config file; a new run keeps it
     })
     secrets.value = s.secrets
     envFile.value = s.env_file
@@ -119,7 +120,8 @@ function saveOnly() {
 const startRun = () => guarded('start', async () => {
   const local = form.provider === 'openai'
   const { id } = await api.createRun({ database: database(), sql_dir: form.sql_dir || null, model: form.model,
-                                       provider: form.provider, base_url: local ? form.base_url : null })
+                                       provider: form.provider, base_url: local ? form.base_url : null,
+                                       propose_on_change: form.propose_on_change })
   await api.start(id, 'context', {})
   location.hash = toHash({ view: 'run', runId: id, stage: 'context' })
 })

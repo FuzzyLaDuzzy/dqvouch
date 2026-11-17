@@ -150,3 +150,14 @@ def test_saved_secrets_file_is_private(tmp_path, monkeypatch):
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     Secrets(tmp_path / ".env").save("GEMINI_API_KEY", "k")
     assert (tmp_path / ".env").stat().st_mode & 0o077 == 0  # only the owner can read the key and the password
+
+
+def test_propose_on_change_defaults_to_true_and_can_be_turned_off(tmp_path):
+    assert load_settings(write(tmp_path, VALID)).propose_on_change is True
+    off = load_settings(write(tmp_path, VALID + "propose_on_change = false\n"))
+    assert off.propose_on_change is False and off.public_dict()["propose_on_change"] is False
+
+
+def test_propose_on_change_must_be_true_or_false(tmp_path):
+    with pytest.raises(ValueError, match="propose_on_change"):
+        load_settings(write(tmp_path, VALID + 'propose_on_change = "yes"\n'))

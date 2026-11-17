@@ -18,7 +18,7 @@ anything runs. Then it keeps running the tests you confirmed and tells you when 
 
 **Contents:** [Features](#features) · [How it works](#how-it-works) · [Quickstart](#quickstart-fictional-orders-example)
 · [Local model](#use-a-local-model) · [Run with dqvouch closed](#run-with-dqvouch-closed) ·
-[Command line](#command-line) · [Configuration](#configuration) · [Results from the thesis](#results-from-the-thesis) ·
+[When the database changes](#when-the-database-changes) · [Command line](#command-line) · [Configuration](#configuration) · [Results from the thesis](#results-from-the-thesis) ·
 [Limitations](#limitations)
 
 ## Features
@@ -173,6 +173,31 @@ in-app schedule and an operating-system one can both be on.
 
 `dqvouch export RUN_DIR [-o tests.sql]` writes the confirmed tests as one SQL file, like the Export SQL button.
 
+## When the database changes
+
+After every scheduled execution (`dqvouch rerun` or the in-app schedule), once its tests ran, dqvouch compares the
+structure of each table with the one the run was reviewed on: its columns (names, types, descriptions), its
+description, the SQL that builds it and the tables it reads from or feeds. This only reads metadata and the SQL
+files, and calls no model. Values never count: more rows or more nulls are what the tests and the trend are for;
+neither does a new dqvouch version.
+
+When something changed, dqvouch makes a new run in which the model only proposes tests for the changed and new
+tables. Every confirmed test is kept as it was, on every table; a test whose column or table is gone is set aside
+with the reason. You get one alert (*"structure changed in 3 table(s), 4 new test(s) to review"*), nothing new runs
+until you confirm it on the Review screen, and meanwhile the old run keeps executing every day. The same change seen
+the next day sends nothing; a second change before you reviewed replaces the waiting run.
+
+Once you review it, the schedule moves to the new run and the history comes along, so the trend of every kept test
+continues. A cron or Task Scheduler line that names the old run keeps working: `rerun` follows it to the newest
+reviewed run and says so. Proposing needs the model key in the `--env-file`; if the model cannot be reached, the
+tests still run, the exit code still comes from them, and dqvouch alerts once and tries again at the next execution.
+If the transformation SQL folder cannot be found when the tests run (moved, or on another machine), `rerun` says
+so and nothing is treated as a change.
+To only be told about a change, without any model call from a schedule, set `propose_on_change = false` in `[run]`.
+Each run keeps the value it was created with (from the config file, or the one `dqvouch ui --config` was started
+with); to change it for a run that already exists, edit `propose_on_change` in that run's `run.json`. Runs made
+before this feature have no value there and propose.
+
 ## Command line
 
 The command line runs every stage in one go, and is how the thesis experiments are reproduced:
@@ -206,6 +231,7 @@ model = "gemini-3.5-flash-lite"   # the key comes from GEMINI_API_KEY (environme
 [run]
 sql_dir = "sql"    # optional: the transformation SQL; each file is matched to the table it produces
 runs_dir = "runs"  # one folder per run
+propose_on_change = true   # false: a scheduled execution only alerts about a structural change
 ```
 
 Transformation files are matched to tables by what they produce: `INSERT INTO t`, `CREATE TABLE t AS SELECT`,

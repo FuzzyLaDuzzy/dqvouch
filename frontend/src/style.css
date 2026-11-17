@@ -379,3 +379,10 @@ details[open]::details-content { block-size: auto; }
 .alert-form .secret-row input { flex: 1; }
 /* reusing the last review on Review */
 .reused label.inline { display: inline-flex; align-items: center; gap: 6px; }
+
+/* a structural change found by a scheduled execution */
+.note.change { background: var(--warn-bg); color: var(--warn); border-radius: 10px; padding: 10px 14px; margin: 0 0 12px; }
+.note.change ul { margin: 4px 0 6px; padding-left: 20px; }
+.note.change p { margin: 4px 0; }
+.note.change .btn { margin-left: 8px; }
+.change-chip { background: var(--warn-bg); color: var(--warn); margin-bottom: 10px; align-self: flex-start; }

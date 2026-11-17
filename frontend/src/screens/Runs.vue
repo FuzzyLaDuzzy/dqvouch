@@ -2,7 +2,7 @@
 import { onMounted, ref } from 'vue'
 import { api } from '../api.js'
 import Icon from '../Icon.vue'
-import { STAGES, STAGE_INFO, everyLabel, toHash } from '../logic.js'
+import { STAGES, STAGE_INFO, changeLabel, everyLabel, toHash } from '../logic.js'
 import Logo from '../Logo.vue'
 
 const runs = ref(null)
@@ -54,6 +54,7 @@ const HOW = ['context', 'dimensions', 'profiling', 'sql_rules', 'tests', 'review
           </div>
           <h3>{{ r.schemas.join(', ') }}</h3>
           <span v-if="r.every_minutes" class="chip schedule-chip"><Icon name="clock" :size="13" />Runs {{ everyLabel(r.every_minutes) }}</span>
+          <span v-if="changeLabel(r)" class="chip change-chip">{{ changeLabel(r) }}</span>
           <div class="segments" :title="`${r.completed.length} of ${STAGES.length} stages`">
             <i v-for="s in STAGES" :key="s" :class="{ on: r.completed.includes(s) }" />
           </div>

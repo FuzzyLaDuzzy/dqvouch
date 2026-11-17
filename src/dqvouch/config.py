@@ -37,6 +37,7 @@ class Settings:
     signals: bool = True
     sql_rules: bool = True
     repair: bool = True
+    propose_on_change: bool = True  # a scheduled execution that finds a structural change proposes tests for it
 
     def public_dict(self) -> dict:
         """Everything except the database password."""
@@ -63,6 +64,8 @@ class Settings:
                              "provider 'openai'")
         if self.context_level not in CONTEXT_LEVELS:
             raise ValueError(f"context_level must be one of {CONTEXT_LEVELS}, got {self.context_level!r}")
+        if type(self.propose_on_change) is not bool:
+            raise ValueError(f"run.propose_on_change must be true or false, got {self.propose_on_change!r}")
 
 
 def load_settings(path: str | Path) -> Settings:
@@ -87,6 +90,7 @@ def load_settings(path: str | Path) -> Settings:
         base_url=llm.get("base_url"),
         sql_dir=str(base / sql_dir) if sql_dir else None,
         runs_dir=str(base / run.get("runs_dir", "runs")),
+        propose_on_change=run.get("propose_on_change", True),
     )
     settings.validate()
     return settings

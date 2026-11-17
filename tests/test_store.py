@@ -138,3 +138,13 @@ def test_a_lock_older_than_a_day_is_replaced(tmp_path):
     assert not run.locked()
     with run.execution_lock():
         assert run.locked()
+
+
+def test_create_accepts_settings_as_a_dict_and_update_info_merges(tmp_path):
+    settings = Settings(database=DatabaseSettings(engine="postgres", database="d", schemas=["s"], password="secret"))
+    first = Run.create(tmp_path, settings)
+    second = Run.create(tmp_path, first.info()["settings"])  # a new run with an earlier run's settings
+    assert second.info()["settings"] == first.info()["settings"]
+    second.update_info(origin={"kind": "change"})
+    assert second.info()["origin"] == {"kind": "change"}
+    assert second.info()["settings"] == first.info()["settings"] and second.info()["id"] == second.id

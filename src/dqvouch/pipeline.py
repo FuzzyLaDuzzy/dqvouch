@@ -70,7 +70,14 @@ def _quiet(progress):
 
 def stage_context(run: Run, wh, tables: list[str] | None = None, progress=None) -> dict:
     """Stage 1 (code): one AssetContext per table of the configured schemas, optionally only `tables`."""
-    t0, s, progress = time.monotonic(), _settings(run), _quiet(progress)
+    data = build_context(_settings(run), wh, tables, progress)
+    run.save("context", data)
+    return data
+
+
+def build_context(settings: dict, wh, tables: list[str] | None = None, progress=None) -> dict:
+    """Stage 1's result without saving it: also how change detection reads the database's structure now."""
+    t0, s, progress = time.monotonic(), settings, _quiet(progress)
     schemas = s["database"]["schemas"]
     progress(f"Reading the tables of {', '.join(schemas)}")
     rows = wh.fetch_metadata(schemas)
@@ -86,9 +93,7 @@ def stage_context(run: Run, wh, tables: list[str] | None = None, progress=None) 
     progress(f"Matching the SQL to {len({(r['database'], r['table']) for r in rows})} tables and reading its facts")
     transformations = load_transformations_by_asset(s["sql_dir"]) if level == "C3" else {}
     contexts = build_asset_contexts(rows, transformations, level, s["signals"], s["sql_rules"])
-    data = {"asset_contexts": contexts, "tables_available": available, "seconds": _seconds(t0)}
-    run.save("context", data)
-    return data
+    return {"asset_contexts": contexts, "tables_available": available, "seconds": _seconds(t0)}
 
 
 def stage_dimensions(run: Run, llm, progress=None) -> dict:
@@ -128,14 +133,7 @@ def stage_sql_rules(run: Run, llm, progress=None) -> dict:
     Skipped, without calling the LLM, below C3, when turned off, or when no table has transformation SQL."""
     t0, s = time.monotonic(), _settings(run)
     contexts = copy.deepcopy(_need(run, "context")["asset_contexts"])
-    if s["context_level"] != "C3":
-        reason = "the SQL Rule Extractor needs context level C3 (the transformation SQL)"
-    elif not s["sql_rules"]:
-        reason = "the SQL Rule Extractor is turned off"
-    elif not any((c.get("transformation") or {}).get("raw_sql") not in (None, "unknown") for c in contexts.values()):
-        reason = "no transformation SQL was matched to any table"
-    else:
-        reason = None
+    reason = sql_rules_skip_reason(s, contexts)
     if reason:
         data = {"skipped": reason, "seconds": _seconds(t0)}
         run.save("sql_rules", data)
@@ -150,14 +148,34 @@ def stage_sql_rules(run: Run, llm, progress=None) -> dict:
     return data
 
 
+def sql_rules_skip_reason(settings: dict, contexts: dict) -> str | None:
+    """Why the SQL Rule Extractor does not run for these settings and tables; None when it does."""
+    if settings["context_level"] != "C3":
+        return "the SQL Rule Extractor needs context level C3 (the transformation SQL)"
+    if not settings["sql_rules"]:
+        return "the SQL Rule Extractor is turned off"
+    if not any((c.get("transformation") or {}).get("raw_sql") not in (None, "unknown") for c in contexts.values()):
+        return "no transformation SQL was matched to any table"
+    return None
+
+
 def stage_tests(run: Run, llm, wh, progress=None) -> dict:
     """Stage 5 (LLM, 1 call per table and per table pair, plus repairs): TestSpecifications, then the validator."""
-    t0, s, progress = time.monotonic(), _settings(run), _quiet(progress)
+    t0, s = time.monotonic(), _settings(run)
     sql_rules = _need(run, "sql_rules")  # ran or skipped: without it the SQL guarantees would be silently missing
-    contexts = _contexts(run)
     profiling = _need(run, "profiling")
     checklist = sql_rules.get("checklist_dimensions") or profiling["dimensions"]
-    summary = copy.deepcopy(profiling["profiling_summary"])
+    data = propose_tests(_contexts(run), checklist, profiling["profiling_summary"], llm, wh, s, progress)
+    data["seconds"] = _seconds(t0)
+    run.save("tests", data)
+    return data
+
+
+def propose_tests(contexts: dict, checklist: dict, summary: dict, llm, wh, settings: dict, progress=None) -> dict:
+    """The Test Specifier calls for `checklist` (one per table, one per pair), the validator and the repair pass:
+    everything stage 5 saves but its duration. Also how a change proposes tests for the changed tables only."""
+    s, progress = settings, _quiet(progress)
+    summary = copy.deepcopy(summary)
     counted, calls = _counted(llm)
     specs, thresholds, ts_calls = run_test_specifier_per_asset(contexts, checklist, summary, counted,
                                                                 _engine(s), progress)
@@ -175,11 +193,9 @@ def stage_tests(run: Run, llm, wh, progress=None) -> dict:
             add_join_key_stats(summary, fixed, contexts, wh)
             validation = validate_test_specifications(specs, contexts, _ASSERTION_TYPES, profiling_summary=summary)
     metric_validation = validate_metric_thresholds(thresholds, contexts, summary)
-    data = {"calls": ts_calls, "test_specifications": validation.accepted, "rejected": validation.rejected,
+    return {"calls": ts_calls, "test_specifications": validation.accepted, "rejected": validation.rejected,
             "metric_thresholds": metric_validation.accepted, "metric_thresholds_rejected": metric_validation.rejected,
-            "profiling_summary": summary, "llm_calls": len(calls), "seconds": _seconds(t0)}
-    run.save("tests", data)
-    return data
+            "profiling_summary": summary, "llm_calls": len(calls)}
 
 
 def stage_review(run: Run, test_specifications: list, metric_thresholds: list, reviewed_in: str = "command",

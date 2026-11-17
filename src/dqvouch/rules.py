@@ -90,13 +90,16 @@ Tables it reads: {", ".join(ups) or "(none known)"}
 ```"""
 
 
-def run_invariant_extractor(asset_contexts: dict, llm, progress=None):
+def run_invariant_extractor(asset_contexts: dict, llm, progress=None, only=None):
     """Two calls per transformation (output guarantees, input requirements); validated together, then stored on
-    the table each one is about (cited as evidence `sql_invariants.<id>`). Returns {calls, accepted, rejected}."""
+    the table each one is about (cited as evidence `sql_invariants.<id>`). Returns {calls, accepted, rejected}.
+    `only`: read just these tables' transformations (a change re-reads the changed ones); every context stays
+    available to the prompts and to store an input requirement on its input table."""
     progress = progress or (lambda message: None)
     record = {"calls": [], "accepted": [], "rejected": []}
     tables = [t for t, ctx in asset_contexts.items()
-              if (ctx.get("transformation") or {}).get("raw_sql") not in (None, "", "unknown")]
+              if (only is None or t in only)
+              and (ctx.get("transformation") or {}).get("raw_sql") not in (None, "", "unknown")]
     n, i = 2 * len(tables), 0
     for table in tables:
         raw_all = []
