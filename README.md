@@ -1,15 +1,15 @@
 # dqvouch
 
 [![ci](https://github.com/FuzzyLaDuzzy/dqvouch/actions/workflows/ci.yml/badge.svg)](https://github.com/FuzzyLaDuzzy/dqvouch/actions/workflows/ci.yml)
-[![python: 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](pyproject.toml)
-[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![python: 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://github.com/FuzzyLaDuzzy/dqvouch/blob/main/pyproject.toml)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/FuzzyLaDuzzy/dqvouch/blob/main/LICENSE)
 
 **An LLM proposes data quality tests, code validates them, you vouch for them.**
 
 Works on **PostgreSQL** and **ClickHouse**, with Gemini or a model on your own machine, from a step-by-step web
 interface or the command line.
 
-![dqvouch: the results of a run, with its schedule and history](docs/screenshot.png)
+![dqvouch: the results of a run, with its schedule and history](https://raw.githubusercontent.com/FuzzyLaDuzzy/dqvouch/main/docs/screenshot.png)
 
 Writing data quality tests by hand needs someone who knows the data, and it does not scale to hundreds of tables.
 dqvouch reads what your pipeline already tells about each table (schema, descriptions, the SQL that builds it,
@@ -41,8 +41,8 @@ anything runs. Then it keeps running the tests you confirmed and tells you when 
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/review.png" alt="Review: a rule the data contradicts is flagged, and the person decides"></td>
-    <td width="50%"><img src="docs/trend.png" alt="Results: a test's observed value over the last executions, with its limit"></td>
+    <td width="50%"><img src="https://raw.githubusercontent.com/FuzzyLaDuzzy/dqvouch/main/docs/review.png" alt="Review: a rule the data contradicts is flagged, and the person decides"></td>
+    <td width="50%"><img src="https://raw.githubusercontent.com/FuzzyLaDuzzy/dqvouch/main/docs/trend.png" alt="Results: a test's observed value over the last executions, with its limit"></td>
   </tr>
   <tr>
     <td><sub>Review: a rule the data contradicts is flagged; you confirm, exclude or restore it.</sub></td>
@@ -103,7 +103,8 @@ docker compose up -d postgres              # PostgreSQL on localhost:15432
 ```
 
 On Windows the programs are in `.venv\Scripts\` instead of `.venv/bin/`. `install.sh` only creates `.venv` and runs
-`pip install -e .` in it; do that yourself if you prefer.
+`pip install -e .` in it; do that yourself if you prefer. For your own database you don't need the repository: each
+[release](https://github.com/FuzzyLaDuzzy/dqvouch/releases) has the package to install with `pip`, then `dqvouch ui`.
 
 The browser opens on the first screen with the example filled in. Paste your Gemini key, press **Start** and follow
 the stages: each screen says what happens, whether code or the model does it, what was sent to Gemini and what came
@@ -144,7 +145,7 @@ The model can run on your own machine, so the metadata and profiling numbers nev
 with OpenAI's chat completions API works: [Ollama](https://ollama.com), LM Studio, vLLM, llama.cpp, and also
 hosted ones such as OpenAI or Azure. On the Configuration screen choose *OpenAI-compatible server*, or in the config:
 
-<img src="docs/local-model.png" alt="The Configuration screen with an OpenAI-compatible server (Ollama) as the model" width="720">
+<img src="https://raw.githubusercontent.com/FuzzyLaDuzzy/dqvouch/main/docs/local-model.png" alt="The Configuration screen with an OpenAI-compatible server (Ollama) as the model" width="720">
 
 ```toml
 [llm]
