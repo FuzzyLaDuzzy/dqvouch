@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "dqvouch"
-version = "0.2.0"
+version = "0.2.1"
 description = "An LLM proposes data quality tests, code validates them, you vouch for them."
 readme = "README.md"
 license = "MIT"
@@ -15,7 +15,13 @@ keywords = ["data quality", "data testing", "llm", "gemini", "postgresql", "clic
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
+    "Environment :: Web Environment",
+    "Framework :: FastAPI",
+    "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Database",
     "Topic :: Software Development :: Quality Assurance",
 ]
@@ -32,6 +38,7 @@ dependencies = [
 [project.urls]
 Homepage = "https://github.com/FuzzyLaDuzzy/dqvouch"
 Issues = "https://github.com/FuzzyLaDuzzy/dqvouch/issues"
+Changelog = "https://github.com/FuzzyLaDuzzy/dqvouch/releases"
 
 [project.optional-dependencies]
 dev = ["httpx>=0.27", "pytest>=8"]

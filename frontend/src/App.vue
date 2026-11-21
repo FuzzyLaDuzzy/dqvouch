@@ -40,6 +40,9 @@ watch(theme, (t) => {
   try { localStorage.setItem('dqvouch-theme', t) } catch { /* private mode: not remembered */ }
 }, { immediate: true })
 const THEMES = [['auto', 'System theme', 'auto'], ['light', 'Light theme', 'sun'], ['dark', 'Dark theme', 'moon']]
+// The installed package's version, from the server (written into the page it would lag behind every release).
+const version = ref('')
+api.settings().then((s) => { version.value = s.version || '' }).catch(() => {})
 
 // --- toasts and the confirm dialog (instead of the browser's alert/confirm boxes)
 const toasts = ref([])
@@ -206,7 +209,7 @@ provide('run', { state, start, go, submitReview, load: loadStage, toast, confirm
           <button v-for="[t, label, icon] in THEMES" :key="t" role="radio" :aria-checked="theme === t" :title="label"
                   :aria-label="label" :class="{ on: theme === t }" @click="theme = t"><Icon :name="icon" :size="16" /></button>
         </div>
-        <div class="version">dqvouch 0.1.0</div>
+        <div class="version">dqvouch {{ version }}</div>
       </div>
     </aside>
 

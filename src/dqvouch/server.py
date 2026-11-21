@@ -6,6 +6,7 @@ no response, run file or error message carries them.
 """
 import contextlib
 import json
+from importlib import metadata
 import os
 import shutil
 import sys
@@ -31,6 +32,10 @@ from dqvouch.validator import _get_evidence_value, _get_profile_evidence_value
 from dqvouch.warehouse import WRITE_WARNING, connect
 
 STATIC = Path(__file__).resolve().parent / "static"
+try:
+    VERSION = metadata.version("dqvouch")  # the installed package, so the sidebar never lags behind a release
+except metadata.PackageNotFoundError:
+    VERSION = "dev"
 LLM_STAGES = {"dimensions", "sql_rules", "tests"}
 DB_STAGES = {"context", "profiling", "tests", "results"}
 DEFAULT_SETTINGS = {
@@ -161,7 +166,7 @@ def create_app(runs_dir, env_path=".env", config_path=None, llm_factory=None, sc
         return {"settings": {"database": s["database"], "sql_dir": s.get("sql_dir"), "model": s.get("model"),
                              "provider": s.get("provider", "gemini"), "base_url": s.get("base_url"),
                              "propose_on_change": s.get("propose_on_change", True)},
-                "secrets": secrets.status(), "env_file": str(secrets.env_path.resolve())}
+                "secrets": secrets.status(), "env_file": str(secrets.env_path.resolve()), "version": VERSION}
 
     @app.put("/api/secrets/{name}")
     def put_secret(name: str, body: dict = Body(...)):

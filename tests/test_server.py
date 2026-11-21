@@ -436,6 +436,13 @@ def test_the_page_is_never_cached(tmp_path):
     assert c.get("/").headers["cache-control"] == "no-cache"
 
 
+def test_the_interface_shows_the_installed_version(tmp_path):
+    """The version in the sidebar is the installed package's, not a number written into the page."""
+    from importlib.metadata import version
+    c = make_client(tmp_path, None, lambda settings, key: None)
+    assert c.get("/api/settings").json()["version"] == version("dqvouch")
+
+
 
 # --- structural changes found by a scheduled execution ----------------------------------------------------------
 

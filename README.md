@@ -1,6 +1,7 @@
 # dqvouch
 
 [![ci](https://github.com/FuzzyLaDuzzy/dqvouch/actions/workflows/ci.yml/badge.svg)](https://github.com/FuzzyLaDuzzy/dqvouch/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/dqvouch.svg)](https://pypi.org/project/dqvouch/)
 [![python: 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://github.com/FuzzyLaDuzzy/dqvouch/blob/main/pyproject.toml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/FuzzyLaDuzzy/dqvouch/blob/main/LICENSE)
 
@@ -103,8 +104,8 @@ docker compose up -d postgres              # PostgreSQL on localhost:15432
 ```
 
 On Windows the programs are in `.venv\Scripts\` instead of `.venv/bin/`. `install.sh` only creates `.venv` and runs
-`pip install -e .` in it; do that yourself if you prefer. For your own database you don't need the repository: each
-[release](https://github.com/FuzzyLaDuzzy/dqvouch/releases) has the package to install with `pip`, then `dqvouch ui`.
+`pip install -e .` in it; do that yourself if you prefer. For your own database you don't need the repository:
+`pip install dqvouch` (Python 3.11 or newer), then `dqvouch ui`.
 
 The browser opens on the first screen with the example filled in. Paste your Gemini key, press **Start** and follow
 the stages: each screen says what happens, whether code or the model does it, what was sent to Gemini and what came
